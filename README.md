@@ -1,5 +1,9 @@
 # letta-py-proxy
 
+Proxy for Letta server and support for streaming. Currently, Letta supports streaming for Anthropic, Deepseek, and OpenAI models.
+
+Pair-programmed with CoPilot to learn about proxying streams.
+
 # Install
 
 ```
