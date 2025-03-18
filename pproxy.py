@@ -4,6 +4,7 @@ import requests
 from flask import Flask, request, jsonify, Response, stream_with_context
 from flask_cors import CORS
 import json
+import sqlite3
 
 """
 
@@ -13,16 +14,15 @@ Proxies connections to the Letta API server.
 
 # Set up logging with debug level and formatted timestamp output.
 logging.basicConfig(
-    level=logging.DEBUG,  # Force debug level
+    level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger('letta_proxy')
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.DEBUG) 
 
 app = Flask(__name__)
 CORS(app)
 
-# Default configuration for API endpoint.
 API_BASE_URL = "http://localhost:8283/v1"
 
 # Parse command line arguments to configure the server.
@@ -30,51 +30,46 @@ parser = argparse.ArgumentParser(description='Standalone API Proxy Server for Le
 parser.add_argument('--port', type=int, default=8284, help='Port to run the proxy server on')
 parser.add_argument('--api-url', type=str, default=API_BASE_URL, help='Base URL of the API to proxy')
 parser.add_argument('--debug', action='store_true', help='Enable debug mode')
+parser.add_argument('--require-token', action='store_true', help='Require a token for proxy access')
+parser.add_argument('--ssl', action='store_true', help='Require SSL for proxy access')
+
 args = parser.parse_args()
 
 # Update API URL if provided via command line arguments.
-API_BASE_URL = args.api_url
+if args.api_url:
+    API_BASE_URL = args.api_url
 
-@app.route('/health')
-def health():
-    """Provides health check information for the proxy server.
-    
-    Returns:
-        JSON: Server status, version, and target API information.
+#@app.route('/set-target', methods=['POST'])
+def set_target(url=None):
     """
-    """Health check endpoint"""
-    return jsonify({
-        "status": "healthy",
-        "proxy_version": "1.0.0",
-        "target_api": API_BASE_URL
-    })
+    Changes the target API URL at runtime.
 
-@app.route('/set-target', methods=['POST'])
-def set_target():
-    """Changes the target API URL at runtime.
-    
-    This endpoint allows dynamic configuration of the API endpoint
-    that the proxy forwards requests to. It validates the new URL
-    before accepting it.
-    
+    Can be called either as a Flask route handler or directly with a URL parameter.
+
+    Args:
+        url (str): The new target API URL to set.
+
     Returns:
-        JSON: Success or error message with status code.
+        dict: A JSON response indicating the success or failure of the operation.
     """
-    """Change the target API URL at runtime"""
     global API_BASE_URL
     try:
-        data = request.json
-        new_url = data.get('url')
+        if url:
+            new_url = url
+        else:
+            data = request.json
+            new_url = data.get('url')
+            
         if not new_url:
             return jsonify({"error": "Missing 'url' parameter"}), 400
             
-        # Basic validation.
+        # Basic validation
         if not new_url.startswith(('http://', 'https://')):
             return jsonify({"error": "URL must start with http:// or https://"}), 400
+            
+        # Test connection to new URL
         try:
-            # Remove trailing slash if present.
             base_url = new_url.rstrip('/')
-            # Check if the URL already includes /v1.
             if not base_url.endswith('/v1'):
                 health_url = f"{base_url}/v1/health/"
             else:
@@ -86,9 +81,13 @@ def set_target():
             if response.status_code != 200:
                 return jsonify({"error": f"Connection test failed: {response.status_code}"}), 400
                 
-            # Update API URL.
+            # Update API URL
             API_BASE_URL = new_url
             logger.info(f"API target changed to: {API_BASE_URL}")
+
+            # Load tokens from SQLite into the in-memory set.
+            load_tokens_into_memory()
+
             return jsonify({"status": "success", "target": API_BASE_URL})
             
         except requests.exceptions.RequestException as e:
@@ -98,21 +97,102 @@ def set_target():
         logger.error(f"Error setting target: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
+# In-memory set for fast token access
+valid_tokens = set()
+
+def load_tokens_into_memory():
+
+    """
+    Load tokens from SQLite into the in-memory set.
+
+    Args:
+        None
+
+    Returns:
+        None
+    """
+    global valid_tokens
+    conn = sqlite3.connect('tokens.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT token FROM tokens')
+    tokens = cursor.fetchall()
+      # Load tokens into the set.
+    valid_tokens = {token[0] for token in tokens}
+    conn.close()
+
+def add_token(token):
+
+    """
+    Add a token to the SQLite database and in-memory set.
+
+    Args:
+        token (str): The token to add.
+
+    Returns:
+        None
+    """
+    conn = sqlite3.connect('tokens.db')
+    cursor = conn.cursor()
+    try:
+        cursor.execute('INSERT INTO tokens (token) VALUES (?)', (token,))
+        conn.commit()
+        # Add to in-memory set.
+        valid_tokens.add(token)
+    except sqlite3.IntegrityError:
+        print("Token already exists.")
+    finally:
+        conn.close()
+
+def validate_token(token):
+    """
+    Validate a token against the in-memory set and SQLite database.
+
+    Args:
+        token (str): The token to validate.
+
+    Returns:
+        bool: True if the token is valid, False otherwise.
+    """
+    if token in valid_tokens:
+        return True
+    # Fallback to SQLite if not found in memory.
+    conn = sqlite3.connect('tokens.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM tokens WHERE token = ?', (token,))
+    valid = cursor.fetchone() is not None
+    conn.close()
+    if valid:
+        # Add to in-memory set for future access
+        valid_tokens.add(token)
+    return valid
+
 def set_cors_headers(response):
-    """Set CORS headers to allow cross-origin requests."""
+    """
+    Set CORS headers to allow cross-origin requests.
+
+    Args:
+        response: The Flask response object.
+
+    Returns:
+        The modified response object with CORS headers set.
+    """
     response.headers['Access-Control-Allow-Origin'] = '*'
-    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, PATCH, OPTIONS'
-    response.headers['Access-Control-Allow-Headers'] = 'Authorization, Content-Type, Accept, Origin, User-Agent, Cache-Control, X-Requested-With'
     response.headers['Access-Control-Max-Age'] = '86400'
     response.headers['Access-Control-Expose-Headers'] = '*'
     return response
 
 @app.after_request
 def after_request(response):
-    """Modify the response to include CORS headers."""
-    # Ensure CORS headers are properly set for all responses.
+    """
+    Modify the response to include CORS headers.
+
+    Args:
+        response: The Flask response object.
+
+    Returns:
+        The modified response object with CORS headers set.
+    """
     response = set_cors_headers(response)
-    
     # For streaming responses, ensure no-cache headers are set.
     if response.mimetype == 'text/event-stream':
         response.headers.update({
@@ -126,9 +206,20 @@ def after_request(response):
 
 @app.route('/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'])
 def proxy(path):
-    """Main proxy function that forwards requests to the target API."""
+    """
+    Proxy requests to the target API.
+
+    Args:
+        path (str): The path to proxy.
+    """
     if request.method == 'OPTIONS':
         return set_cors_headers(jsonify({'status': 'ok'}))
+
+    # Check for token in headers if required
+    if args.require_token:
+        token = request.headers.get('Authorization')
+        if not token or not validate_token(token):
+            return jsonify({"error": "Unauthorized: Invalid or missing token"}), 401
 
     try:
         # Construct the target URL.
@@ -137,8 +228,9 @@ def proxy(path):
         target_url = f"{API_BASE_URL}/{path}"
         logger.info(f"Proxying {request.method} request to: {target_url}")
         
-        # Log complete request details.
-        logger.debug(f"Request headers: {dict(request.headers)}")
+        # Log complete request details, excluding the Authorization header.
+        headers_to_log = {key: value for key, value in request.headers.items() if key.lower() != 'authorization'}
+        logger.debug(f"Request headers: {dict(headers_to_log)}")
         logger.debug(f"Request query params: {dict(request.args)}")
         if request.is_json:
             logger.debug(f"Request JSON body: {request.json}")
@@ -397,7 +489,7 @@ def proxy(path):
                 direct_passthrough=True
             )
 
-        # Handle empty responses from DELETE methods.
+        # Handle empty responses since DELETE sometimes have those.
         if not response.content:
             return '', response.status_code
 
@@ -416,7 +508,31 @@ def proxy(path):
         logger.error(f"Proxy error: {str(e)}", exc_info=True)
         return jsonify({"error": f"Proxy error: {str(e)}"}), 500
 
+@app.route('/refresh-tokens', methods=['GET'])
+def refresh_tokens():
+    """
+    Refresh tokens from the database and reload them into memory.
+
+    Returns:
+        dict: A JSON response indicating the success or failure of the operation.
+    """
+    # Client IP must be from 127.0.0.1.
+    if request.remote_addr != '127.0.0.1':
+        return jsonify({"error": "Unauthorized: Invalid client IP"}), 401
+
+    try:
+        load_tokens_into_memory()
+        logger.info("Tokens reloaded from the database.")
+        return "Tokens reloaded successfully"
+    except Exception as e:
+        logger.error(f"Error refreshing tokens: {str(e)}")
+        return str(e)
+
 if __name__ == '__main__':
+
+    with app.app_context():
+        set_target(API_BASE_URL)
+    
     logger.info(f"Starting proxy server on port {args.port}")
     logger.info(f"Proxying requests to: {API_BASE_URL}")
     app.run(host='0.0.0.0', port=args.port, debug=args.debug)
