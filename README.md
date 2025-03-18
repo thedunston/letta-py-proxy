@@ -16,6 +16,18 @@ then run:
 
 ```
 python pproxy.py -h
+
+usage: pproxy.py [-h] [--port PORT] [--api-url API_URL] [--debug] [--require-token] [--ssl]
+
+Standalone API Proxy Server for Letta
+
+options:
+  -h, --help         show this help message and exit
+  --port PORT        Port to run the proxy server on
+  --api-url API_URL  Base URL of the API to proxy
+  --debug            Enable debug mode
+  --require-token    Require a token for proxy access
+  --ssl              Require SSL for proxy access
 ```
 
 The default is to listen on all interfaces on port 8284 and forward to `http://localhost:8283/v1`.
@@ -26,9 +38,9 @@ Point your letta application to the proxy server. For example, the default would
 
 ## Authorization
 
-Add the flag ```--require-tokens``` to use Authorization Headers with `pproxy.py`. ```example: Authorization efd02f2aad505d20fe1635f0a1fd6872```
+Add the flag ```--require-tokens``` to use Authorization Headers with `pproxy.py`. ```example: Authorization efd02f2aad505d20fe1635f0a1fd6872```. By default, it is off.
 
-Tokens can be generated and managed with `manage_tokens.py`.
+Tokens can be generated and managed with `manage_tokens.py`. Tokens are stored in a sqlite db `tokens.db` and loaded in memory when the proxy starts. For now, this must be run on the same server as the `pproxy` or using a tunnel since `/refresh-tokens` check if the client is `127.0.0.`.
 
 ```
 python3 manage_tokens.py -h
@@ -58,7 +70,9 @@ python manage_tokens.py -ct duane
 Token with name 'duane' deleted successfully.
 ```
 
-You'll need to add the `letta-py-proxy` URL so it can refresh tokens loaded in-memory when a token is deleted for changes to take effect immediately.
+You'll need to add the `letta-py-proxy` URL so it can refresh tokens loaded in-memory when a token is deleted for changes to take effect immediately (reload the tokens in memory).
+
+Deleting a token sends the `/refresh-token` to the `pproxy` server.
 
 ```
 Token with name 'duane' deleted successfully.
