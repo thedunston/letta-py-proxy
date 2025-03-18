@@ -30,7 +30,8 @@ parser = argparse.ArgumentParser(description='Standalone API Proxy Server for Le
 parser.add_argument('--port', type=int, default=8284, help='Port to run the proxy server on')
 parser.add_argument('--api-url', type=str, default=API_BASE_URL, help='Base URL of the API to proxy')
 parser.add_argument('--debug', action='store_true', help='Enable debug mode')
-parser.add_argument('--require-token', action='store_true', help='Require a token for proxy access')
+parser.add_argument('--require-token', action='store_true', help='Require a token for proxy access')  # New flag for token requirement
+# require ssl.
 parser.add_argument('--ssl', action='store_true', help='Require SSL for proxy access')
 
 args = parser.parse_args()
@@ -41,6 +42,7 @@ if args.api_url:
 
 #@app.route('/set-target', methods=['POST'])
 def set_target(url=None):
+    # Docstring format documentation.
     """
     Changes the target API URL at runtime.
 
@@ -100,6 +102,7 @@ def set_target(url=None):
 # In-memory set for fast token access
 valid_tokens = set()
 
+
 def load_tokens_into_memory():
 
     """
@@ -116,8 +119,7 @@ def load_tokens_into_memory():
     cursor = conn.cursor()
     cursor.execute('SELECT token FROM tokens')
     tokens = cursor.fetchall()
-      # Load tokens into the set.
-    valid_tokens = {token[0] for token in tokens}
+    valid_tokens = {token[0] for token in tokens}  # Load tokens into the set
     conn.close()
 
 def add_token(token):
@@ -136,8 +138,7 @@ def add_token(token):
     try:
         cursor.execute('INSERT INTO tokens (token) VALUES (?)', (token,))
         conn.commit()
-        # Add to in-memory set.
-        valid_tokens.add(token)
+        valid_tokens.add(token)  # Add to in-memory set
     except sqlite3.IntegrityError:
         print("Token already exists.")
     finally:
@@ -155,15 +156,14 @@ def validate_token(token):
     """
     if token in valid_tokens:
         return True
-    # Fallback to SQLite if not found in memory.
+    # Fallback to SQLite if not found in memory
     conn = sqlite3.connect('tokens.db')
     cursor = conn.cursor()
     cursor.execute('SELECT * FROM tokens WHERE token = ?', (token,))
     valid = cursor.fetchone() is not None
     conn.close()
     if valid:
-        # Add to in-memory set for future access
-        valid_tokens.add(token)
+        valid_tokens.add(token)  # Add to in-memory set for future access
     return valid
 
 def set_cors_headers(response):
@@ -516,17 +516,17 @@ def refresh_tokens():
     Returns:
         dict: A JSON response indicating the success or failure of the operation.
     """
-    # Client IP must be from 127.0.0.1.
+    # Client IP must be from 127.0.0.1
     if request.remote_addr != '127.0.0.1':
         return jsonify({"error": "Unauthorized: Invalid client IP"}), 401
 
     try:
         load_tokens_into_memory()
         logger.info("Tokens reloaded from the database.")
-        return "Tokens reloaded successfully"
+        return jsonify({"status": "success", "message": "Tokens reloaded successfully"})
     except Exception as e:
         logger.error(f"Error refreshing tokens: {str(e)}")
-        return str(e)
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
 
