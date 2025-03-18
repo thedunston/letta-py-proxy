@@ -2,6 +2,8 @@ import argparse
 import sqlite3
 import secrets
 import requests
+import json
+
 """
 
 This script is used to create and manage tokens and proxy servers.
@@ -44,6 +46,17 @@ def add_token(name):
     Args:
         name (str): The name associated with the token.
     """
+    # check if there is at least one proxy server.
+    conn = sqlite3.connect('tokens.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM proxy_servers')
+    if cursor.fetchone():
+        print("There must be at least one proxy server. Add one with the --add-proxy-server flag.")
+        return
+    conn.close()
+
+
+
     token = generate_token()  # Generate a secure random token.
     conn = sqlite3.connect('tokens.db')
     cursor = conn.cursor()
@@ -130,11 +143,14 @@ def delete_token(name):
         print("No proxy servers found.")
         return
 
-    # Call the proxy server delete function with the seected proxy server. /refresh-tokens
+    # Call the proxy server refresh function with the selected proxy server. /refresh-tokens
     response = requests.get(f'{proxy_server_url}/refresh-tokens')
-    print(response.json())
-    
 
+    # Convert the json response ot plain text.
+    response = response.json()
+    print("***", response['message'], "***")
+
+    
 def add_proxy_server(url):
     """Add a new proxy server to the database.
 
