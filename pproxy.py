@@ -65,11 +65,11 @@ def set_target(url=None):
         if not new_url:
             return jsonify({"error": "Missing 'url' parameter"}), 400
             
-        # Basic validation
+        # Basic validation.
         if not new_url.startswith(('http://', 'https://')):
             return jsonify({"error": "URL must start with http:// or https://"}), 400
             
-        # Test connection to new URL
+        # Test connection to new URL.
         try:
             base_url = new_url.rstrip('/')
             if not base_url.endswith('/v1'):
@@ -99,7 +99,7 @@ def set_target(url=None):
         logger.error(f"Error setting target: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
-# In-memory set for fast token access
+# In-memory set for fast token access.
 valid_tokens = set()
 
 
@@ -119,7 +119,8 @@ def load_tokens_into_memory():
     cursor = conn.cursor()
     cursor.execute('SELECT token FROM tokens')
     tokens = cursor.fetchall()
-    valid_tokens = {token[0] for token in tokens}  # Load tokens into the set
+    # Load tokens into the set.
+    valid_tokens = {token[0] for token in tokens}  
     conn.close()
 
 def add_token(token):
@@ -138,7 +139,8 @@ def add_token(token):
     try:
         cursor.execute('INSERT INTO tokens (token) VALUES (?)', (token,))
         conn.commit()
-        valid_tokens.add(token)  # Add to in-memory set
+        # Add to in-memory set.
+        valid_tokens.add(token)  
     except sqlite3.IntegrityError:
         print("Token already exists.")
     finally:
@@ -156,14 +158,15 @@ def validate_token(token):
     """
     if token in valid_tokens:
         return True
-    # Fallback to SQLite if not found in memory
+    # Fallback to SQLite if not found in memory.
     conn = sqlite3.connect('tokens.db')
     cursor = conn.cursor()
     cursor.execute('SELECT * FROM tokens WHERE token = ?', (token,))
     valid = cursor.fetchone() is not None
     conn.close()
     if valid:
-        valid_tokens.add(token)  # Add to in-memory set for future access
+        # Add to in-memory set for future access.
+        valid_tokens.add(token)
     return valid
 
 def set_cors_headers(response):
@@ -176,7 +179,11 @@ def set_cors_headers(response):
     Returns:
         The modified response object with CORS headers set.
     """
-    response.headers['Access-Control-Allow-Origin'] = '*'
+    origin = request.headers.get('Origin', '*')
+    response.headers['Access-Control-Allow-Origin'] = origin
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, PATCH, OPTIONS'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Cache-Control, Connection'
+    response.headers['Access-Control-Allow-Credentials'] = 'true'
     response.headers['Access-Control-Max-Age'] = '86400'
     response.headers['Access-Control-Expose-Headers'] = '*'
     return response
@@ -213,13 +220,40 @@ def proxy(path):
         path (str): The path to proxy.
     """
     if request.method == 'OPTIONS':
-        return set_cors_headers(jsonify({'status': 'ok'}))
+        # Get the exact headers that the browser is requesting permission for
+        requested_headers = request.headers.get('Access-Control-Request-Headers', '')
+        requested_method = request.headers.get('Access-Control-Request-Method', '')
+        origin = request.headers.get('Origin', '*')
+        
+        logger.debug(f"CORS preflight request: Origin={origin}, Method={requested_method}, Headers={requested_headers}")
+        
+        response = Response()
+        response.headers.update({
+            'Access-Control-Allow-Origin': origin,
+            'Access-Control-Allow-Methods': requested_method or 'GET, POST, PUT, DELETE, PATCH, OPTIONS',
+            'Access-Control-Allow-Headers': requested_headers,
+            'Access-Control-Allow-Credentials': 'true',
+            'Access-Control-Max-Age': '3600'
+        })
+        return response
 
-    # Check for token in headers if required
+    # Check for token in headers if required.
     if args.require_token:
         token = request.headers.get('Authorization')
         if not token or not validate_token(token):
             return jsonify({"error": "Unauthorized: Invalid or missing token"}), 401
+
+    # Bearer set for local proxying and no SSL (proxy on local system or tunnel to API servers).
+    # Pass through the proxy to the Letta server
+    # if the Authorization header contains 'Bearer XXX'
+    if 'Authorization' in request.headers:
+        check_bearer = request.headers['Authorization']
+        if check_bearer.startswith('Bearer '):
+            headers['Authorization'] = check_bearer
+
+    # Forward all ssl requests to the target API.
+    if args.ssl:
+        return requests.get(f"{API_BASE_URL}/{path}", headers=request.headers)
 
     try:
         # Construct the target URL.
@@ -474,11 +508,14 @@ def proxy(path):
                     yield "data: [DONE]\n\n".encode('utf-8')
 
             # Set headers for Server-Sent Events streaming response.
+            origin = request.headers.get('Origin', '*')
             headers = {
                 'Content-Type': 'text/event-stream',
                 'Cache-Control': 'no-cache, no-transform',
                 'Connection': 'keep-alive',
-                'X-Accel-Buffering': 'no'
+                'X-Accel-Buffering': 'no',
+                'Access-Control-Allow-Origin': origin,
+                'Access-Control-Allow-Credentials': 'true'
             }
 
             logger.info("Returning streaming response")
